@@ -1,8 +1,9 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { Link } from 'react-router-dom';
 import type { StatsResult, FilterParams } from '@shared/types/index';
 import { StatCards } from './StatCards';
 import { DistributionChart } from './DistributionChart';
+import { WhereDoIStandWidget } from './WhereDoIStandWidget';
 
 // ─── Mock data for development ─────────────────────────────────────────
 
@@ -27,7 +28,6 @@ export const MOCK_STATS: StatsResult = {
 interface ChartContainerProps {
   stats: StatsResult | null;
   isLoading: boolean;
-  userSalary?: number;
   filters: FilterParams;
 }
 
@@ -162,9 +162,10 @@ const InsufficientDataState: React.FC<InsufficientDataStateProps> = ({ count, fi
 export const ChartContainer: React.FC<ChartContainerProps> = ({
   stats,
   isLoading,
-  userSalary,
   filters,
 }) => {
+  const [userSalary, setUserSalary] = useState<number | undefined>();
+
   const currency = stats?.currency ?? 'INR';
   const role     = filters.jobTitle  ?? 'This role';
   const location = filters.country   ?? filters.city ?? 'your region';
@@ -192,6 +193,14 @@ export const ChartContainer: React.FC<ChartContainerProps> = ({
   return (
     <div className="flex flex-col gap-5">
       <StatCards stats={stats} userSalary={userSalary} currency={currency} />
+
+      <WhereDoIStandWidget
+        percentiles={stats.percentiles}
+        currency={currency}
+        role={role}
+        location={location}
+        onSalaryChange={setUserSalary}
+      />
 
       <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-6">
         <DistributionChart
