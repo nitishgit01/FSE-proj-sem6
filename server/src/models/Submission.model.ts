@@ -136,7 +136,8 @@ submissionSchema.pre('save', function (next) {
 
 // ── JSON: strip internal fields ─────────────────────────
 submissionSchema.set('toJSON', {
-  transform: (_doc, ret) => {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  transform: (_doc: any, ret: any) => {
     delete ret.__v;
     return ret;
   },

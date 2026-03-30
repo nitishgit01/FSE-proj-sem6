@@ -35,60 +35,26 @@ export const getStats = async (filters: StatsQuery): Promise<StatsResult> => {
   }
 
   // ── Step 3: Run aggregation pipeline ────────────────
-  const pipeline = [
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const pipeline: any[] = [
     { $match: matchStage },
     {
       $facet: {
-        // Count
         count: [{ $count: 'total' }],
-
-        // Percentiles
         percentiles: [
           {
             $group: {
               _id: null,
-              p10: {
-                $percentile: {
-                  input: '$totalComp',
-                  p: [0.1],
-                  method: 'approximate',
-                },
-              },
-              p25: {
-                $percentile: {
-                  input: '$totalComp',
-                  p: [0.25],
-                  method: 'approximate',
-                },
-              },
-              p50: {
-                $percentile: {
-                  input: '$totalComp',
-                  p: [0.5],
-                  method: 'approximate',
-                },
-              },
-              p75: {
-                $percentile: {
-                  input: '$totalComp',
-                  p: [0.75],
-                  method: 'approximate',
-                },
-              },
-              p90: {
-                $percentile: {
-                  input: '$totalComp',
-                  p: [0.9],
-                  method: 'approximate',
-                },
-              },
+              p10: { $percentile: { input: '$totalComp', p: [0.1], method: 'approximate' } },
+              p25: { $percentile: { input: '$totalComp', p: [0.25], method: 'approximate' } },
+              p50: { $percentile: { input: '$totalComp', p: [0.5], method: 'approximate' } },
+              p75: { $percentile: { input: '$totalComp', p: [0.75], method: 'approximate' } },
+              p90: { $percentile: { input: '$totalComp', p: [0.9], method: 'approximate' } },
               minSalary: { $min: '$totalComp' },
               maxSalary: { $max: '$totalComp' },
             },
           },
         ],
-
-        // Most common currency for this filter group
         currency: [
           { $group: { _id: '$currency', count: { $sum: 1 } } },
           { $sort: { count: -1 } },
@@ -123,7 +89,8 @@ export const getStats = async (filters: StatsQuery): Promise<StatsResult> => {
   const histogram: HistogramBucket[] = [];
 
   if (bucketWidth > 0) {
-    const histogramPipeline = [
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const histogramPipeline: any[] = [
       { $match: matchStage },
       {
         $bucket: {
@@ -133,9 +100,7 @@ export const getStats = async (filters: StatsQuery): Promise<StatsResult> => {
             (_, i) => minSalary + i * bucketWidth
           ),
           default: 'overflow',
-          output: {
-            count: { $sum: 1 },
-          },
+          output: { count: { $sum: 1 } },
         },
       },
     ];

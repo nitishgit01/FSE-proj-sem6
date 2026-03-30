@@ -68,7 +68,7 @@ export const errorHandler = (
   }
 
   // ── MongoDB duplicate key error ─────────────────────
-  if ((err as Record<string, unknown>).code === 11000) {
+  if ((err as unknown as Record<string, unknown>).code === 11000) {
     res.status(409).json({
       success: false,
       error: {

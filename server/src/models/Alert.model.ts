@@ -1,7 +1,14 @@
 import mongoose, { Schema, Document } from 'mongoose';
-import type { IAlert } from '../../../shared/types/index';
 
-export interface IAlertDocument extends Omit<IAlert, '_id'>, Document {}
+export interface IAlertDocument extends Document {
+  userId: mongoose.Types.ObjectId;
+  jobTitle: string;
+  country: string;
+  targetSalary: number;
+  currency: string;
+  triggered: boolean;
+  createdAt: Date;
+}
 
 const alertSchema = new Schema<IAlertDocument>(
   {

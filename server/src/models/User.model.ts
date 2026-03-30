@@ -64,9 +64,9 @@ userSchema.methods.comparePassword = async function (
   return bcrypt.compare(candidatePassword, this.passwordHash);
 };
 
-// ── JSON serialisation: strip sensitive fields ───────────
 userSchema.set('toJSON', {
-  transform: (_doc, ret) => {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  transform: (_doc: any, ret: any) => {
     delete ret.passwordHash;
     delete ret.verificationToken;
     delete ret.verificationTokenExpiry;
