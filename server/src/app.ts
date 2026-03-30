@@ -5,7 +5,7 @@ import cookieParser from 'cookie-parser';
 import mongoSanitize from 'express-mongo-sanitize';
 import hpp from 'hpp';
 import morgan from 'morgan';
-import { env } from './config/env';
+import { config } from './config/env';
 import { globalLimiter } from './middleware/rateLimiter';
 import { errorHandler } from './middleware/errorHandler';
 
@@ -25,7 +25,7 @@ app.use(helmet());
 // 2. CORS — restrict to known frontend origin
 app.use(
   cors({
-    origin: env.CLIENT_URL,
+    origin: config.CLIENT_URL,
     credentials: true, // Required for HttpOnly cookies
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization'],
@@ -48,7 +48,7 @@ app.use(mongoSanitize());
 app.use(hpp());
 
 // 8. Request logging (dev only)
-if (env.NODE_ENV === 'development') {
+if (config.NODE_ENV === 'development') {
   app.use(morgan('dev'));
 }
 

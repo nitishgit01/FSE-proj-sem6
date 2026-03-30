@@ -1,5 +1,5 @@
 import mongoose from 'mongoose';
-import { connectDB } from '../config/db';
+import connectDB from '../config/db';
 import { Role } from '../models/Role.model';
 
 /**
