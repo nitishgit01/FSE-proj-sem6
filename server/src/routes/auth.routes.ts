@@ -7,19 +7,19 @@ import {
   resendVerification,
   getMe,
 } from '../controllers/auth.controller';
-import { requireAuth } from '../middleware/requireAuth';
-import { authLimiter } from '../middleware/rateLimiter';
+import { requireAuth }   from '../middleware/requireAuth';
+import { authLimiter, resendLimiter } from '../middleware/rateLimiter';
 
 const router = Router();
 
-// Public routes (rate-limited)
-router.post('/register', authLimiter, register);
-router.post('/login', authLimiter, login);
-router.get('/verify/:token', verifyEmail);
-router.post('/resend-verification', authLimiter, resendVerification);
+// Public — rate-limited
+router.post('/register',             authLimiter,   register);
+router.post('/login',                authLimiter,   login);
+router.get( '/verify/:token',                       verifyEmail);
+router.post('/resend-verification',  resendLimiter, resendVerification);
 
-// Protected routes
+// Protected
 router.post('/logout', requireAuth, logout);
-router.get('/me', requireAuth, getMe);
+router.get( '/me',     requireAuth, getMe);
 
 export default router;

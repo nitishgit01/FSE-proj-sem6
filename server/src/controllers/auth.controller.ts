@@ -2,162 +2,149 @@ import { Request, Response, NextFunction } from 'express';
 import { z } from 'zod';
 import * as authService from '../services/auth.service';
 import { setTokenCookie, clearTokenCookie } from '../utils/jwt';
+import { asyncHandler } from '../utils/asyncHandler';
 
-// ── Validation Schemas ────────────────────────────────────
+// ─── Validation Schemas ────────────────────────────────────────────────
 
 const registerSchema = z.object({
-  email: z.string().email('Valid email is required'),
+  email: z.string().email('A valid email address is required'),
   password: z
     .string()
     .min(8, 'Password must be at least 8 characters')
     .regex(/[A-Z]/, 'Password must contain at least one uppercase letter')
     .regex(/[0-9]/, 'Password must contain at least one number'),
-  confirmPassword: z.string(),
-}).refine((data) => data.password === data.confirmPassword, {
-  message: 'Passwords do not match',
-  path: ['confirmPassword'],
 });
 
 const loginSchema = z.object({
-  email: z.string().email('Valid email is required'),
+  email:    z.string().email('A valid email address is required'),
   password: z.string().min(1, 'Password is required'),
 });
 
-// ── Controllers ───────────────────────────────────────────
+const emailSchema = z.object({
+  email: z.string().email('A valid email address is required'),
+});
+
+// ─── Controllers ───────────────────────────────────────────────────────
 
 /**
  * POST /api/auth/register
+ *
+ * Registers a new user. No auto-login — user must verify email first.
+ * Generic 409 message prevents email enumeration.
  */
-export const register = async (
+export const register = asyncHandler(async (
   req: Request,
   res: Response,
-  next: NextFunction
+  _next: NextFunction
 ): Promise<void> => {
-  try {
-    const body = registerSchema.parse(req.body);
-    const { user, token } = await authService.register(body.email, body.password);
+  const { email, password } = registerSchema.parse(req.body);
 
-    setTokenCookie(res, token);
+  await authService.register(email, password);
 
-    res.status(201).json({
-      success: true,
-      data: {
-        user: user.toJSON(),
-        message: 'Account created. Please check your email to verify your account.',
-      },
-    });
-  } catch (error) {
-    next(error);
-  }
-};
+  res.status(201).json({
+    success: true,
+    data: {
+      message: 'Check your email to verify your account.',
+    },
+  });
+});
 
 /**
  * POST /api/auth/login
  */
-export const login = async (
+export const login = asyncHandler(async (
   req: Request,
   res: Response,
-  next: NextFunction
+  _next: NextFunction
 ): Promise<void> => {
-  try {
-    const body = loginSchema.parse(req.body);
-    const { user, token } = await authService.login(body.email, body.password);
+  const { email, password } = loginSchema.parse(req.body);
 
-    setTokenCookie(res, token);
+  const { user, token } = await authService.login(email, password);
 
-    res.status(200).json({
-      success: true,
-      data: { user: user.toJSON() },
-    });
-  } catch (error) {
-    next(error);
-  }
-};
+  setTokenCookie(res, token);
+
+  res.status(200).json({
+    success: true,
+    data: { user },
+  });
+});
 
 /**
  * POST /api/auth/logout
  */
-export const logout = async (
+export const logout = asyncHandler(async (
   _req: Request,
   res: Response,
-  next: NextFunction
+  _next: NextFunction
 ): Promise<void> => {
-  try {
-    clearTokenCookie(res);
+  clearTokenCookie(res);
 
-    res.status(200).json({
-      success: true,
-      data: { message: 'Logged out successfully.' },
-    });
-  } catch (error) {
-    next(error);
-  }
-};
+  res.status(200).json({
+    success: true,
+    data: { message: 'Logged out successfully.' },
+  });
+});
 
 /**
  * GET /api/auth/verify/:token
+ * Auto-logs in user after verification by setting the JWT cookie.
  */
-export const verifyEmail = async (
+export const verifyEmail = asyncHandler(async (
   req: Request,
   res: Response,
-  next: NextFunction
+  _next: NextFunction
 ): Promise<void> => {
-  try {
-    const user = await authService.verifyEmail(req.params.token);
-    const jwtToken = (await import('../utils/jwt')).signToken(user._id.toString());
+  const { token: rawToken } = req.params;
 
-    setTokenCookie(res, jwtToken);
+  const { user, jwtToken } = await authService.verifyEmail(rawToken);
 
-    res.status(200).json({
-      success: true,
-      data: {
-        user: user.toJSON(),
-        message: 'Your email has been verified. You are now logged in.',
-      },
-    });
-  } catch (error) {
-    next(error);
-  }
-};
+  setTokenCookie(res, jwtToken);
+
+  res.status(200).json({
+    success: true,
+    data: {
+      user,
+      message: 'Email verified. You are now logged in.',
+    },
+  });
+});
 
 /**
  * POST /api/auth/resend-verification
+ * Anti-enumeration: always returns 200 success regardless of whether the email exists.
  */
-export const resendVerification = async (
+export const resendVerification = asyncHandler(async (
   req: Request,
   res: Response,
-  next: NextFunction
+  _next: NextFunction
 ): Promise<void> => {
-  try {
-    const { email } = z.object({ email: z.string().email() }).parse(req.body);
-    await authService.resendVerification(email);
+  const { email } = emailSchema.parse(req.body);
 
-    // Always return success (don't reveal if email exists)
-    res.status(200).json({
-      success: true,
-      data: { message: 'If this email is registered, a verification link has been sent.' },
-    });
-  } catch (error) {
-    next(error);
-  }
-};
+  await authService.resendVerification(email);
+
+  res.status(200).json({
+    success: true,
+    data: {
+      message: 'If this email is registered and unverified, a new link has been sent.',
+    },
+  });
+});
 
 /**
  * GET /api/auth/me
+ * Returns the safe AuthUser profile for the authenticated user.
  */
-export const getMe = async (
+export const getMe = asyncHandler(async (
   req: Request,
   res: Response,
-  next: NextFunction
+  _next: NextFunction
 ): Promise<void> => {
-  try {
-    const profile = await authService.getProfile(req.user!._id.toString());
+  const userId = req.user!.userId;
 
-    res.status(200).json({
-      success: true,
-      data: profile,
-    });
-  } catch (error) {
-    next(error);
-  }
-};
+  const user = await authService.getProfile(userId);
+
+  res.status(200).json({
+    success: true,
+    data: { user },
+  });
+});

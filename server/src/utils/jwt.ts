@@ -8,8 +8,10 @@ export interface JwtPayload {
   exp: number;
 }
 
+const COOKIE_NAME = 'wg_token';
+
 /**
- * Parse a duration string like '7d', '24h', '60m' to seconds.
+ * Parse a duration string like '7d', '24h', '60m' into seconds.
  */
 const parseDuration = (duration: string): number => {
   const match = duration.match(/^(\d+)([dhms])$/);
@@ -21,51 +23,52 @@ const parseDuration = (duration: string): number => {
     case 'h': return value * 60 * 60;
     case 'm': return value * 60;
     case 's': return value;
-    default: return 7 * 24 * 60 * 60;
+    default:  return 7 * 24 * 60 * 60;
   }
 };
 
 /**
- * Sign a JWT token for a given user ID.
+ * Sign a JWT for the given userId.
  */
-export const signToken = (userId: string): string => {
-  return jwt.sign({ userId }, env.JWT_SECRET, {
+export const signToken = (userId: string): string =>
+  jwt.sign({ userId }, env.JWT_SECRET, {
     expiresIn: parseDuration(env.JWT_EXPIRES_IN),
   });
-};
 
 /**
- * Verify and decode a JWT token.
+ * Verify and decode a JWT.
+ * Returns null (instead of throwing) on invalid or expired tokens.
  */
-export const verifyToken = (token: string): JwtPayload => {
-  return jwt.verify(token, env.JWT_SECRET) as JwtPayload;
+export const verifyToken = (token: string): { userId: string } | null => {
+  try {
+    const decoded = jwt.verify(token, env.JWT_SECRET) as JwtPayload;
+    return { userId: decoded.userId };
+  } catch {
+    return null;
+  }
 };
 
 /**
- * Set the JWT as an HttpOnly cookie on the response.
+ * Set the JWT as an HttpOnly cookie named 'wg_token'.
  */
 export const setTokenCookie = (res: Response, token: string): void => {
-  const maxAge = 7 * 24 * 60 * 60 * 1000; // 7 days in ms
-
-  res.cookie('token', token, {
+  res.cookie(COOKIE_NAME, token, {
     httpOnly: true,
-    secure: env.COOKIE_SECURE,
+    secure: env.NODE_ENV === 'production',
     sameSite: 'strict',
-    domain: env.NODE_ENV === 'production' ? env.COOKIE_DOMAIN : undefined,
-    maxAge,
+    maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days in ms
     path: '/',
   });
 };
 
 /**
- * Clear the JWT cookie.
+ * Clear the 'wg_token' cookie.
  */
 export const clearTokenCookie = (res: Response): void => {
-  res.cookie('token', '', {
+  res.cookie(COOKIE_NAME, '', {
     httpOnly: true,
-    secure: env.COOKIE_SECURE,
+    secure: env.NODE_ENV === 'production',
     sameSite: 'strict',
-    domain: env.NODE_ENV === 'production' ? env.COOKIE_DOMAIN : undefined,
     maxAge: 0,
     path: '/',
   });

@@ -1,10 +1,9 @@
 import { Submission, ISubmissionDocument } from '../models/Submission.model';
-import { User } from '../models/User.model';
+import { User, IUserDocument } from '../models/User.model';
 import { normaliseTitle } from '../utils/normaliseTitle';
 import { AppError } from '../middleware/errorHandler';
 import { ApiErrorCode } from '../../../shared/types/index';
 import type { SubmissionRequest } from '../../../shared/types/index';
-import type { IUserDocument } from '../models/User.model';
 
 /**
  * Create a new salary submission.
@@ -14,20 +13,26 @@ import type { IUserDocument } from '../models/User.model';
  */
 export const createSubmission = async (
   data: SubmissionRequest,
-  user?: IUserDocument
+  reqUser?: { userId: string }
 ): Promise<ISubmissionDocument> => {
+  // Resolve full user doc if authenticated (for rate limiting + tracking)
+  let user: IUserDocument | null = null;
+  if (reqUser?.userId) {
+    user = await User.findById(reqUser.userId);
+  }
+
   // Enforce 30-day rate limit for logged-in users
   if (user) {
     if (user.lastSubmittedAt) {
-      const daysSinceLastSubmission =
+      const daysSince =
         (Date.now() - user.lastSubmittedAt.getTime()) / (1000 * 60 * 60 * 24);
 
-      if (daysSinceLastSubmission < 30) {
-        const nextEligibleDate = new Date(
+      if (daysSince < 30) {
+        const nextDate = new Date(
           user.lastSubmittedAt.getTime() + 30 * 24 * 60 * 60 * 1000
         );
         throw new AppError(
-          `You've already submitted recently. You can submit again on ${nextEligibleDate.toLocaleDateString()}.`,
+          `You can submit again on ${nextDate.toLocaleDateString()}.`,
           429,
           ApiErrorCode.RATE_LIMITED
         );

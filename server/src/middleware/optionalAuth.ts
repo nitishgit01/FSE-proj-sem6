@@ -1,30 +1,27 @@
 import { Request, Response, NextFunction } from 'express';
 import { verifyToken } from '../utils/jwt';
-import { User } from '../models/User.model';
 
 /**
- * Middleware: Optionally attaches user if a valid JWT cookie exists.
- * Does NOT reject the request if no token is present — allows guests through.
- * Used on routes that work for both guests and logged-in users (e.g. submissions).
+ * Middleware: Optionally attaches { userId } to req.user if a valid
+ * 'wg_token' cookie is present. Never rejects the request — guests pass through.
+ *
+ * Used on routes that work for both authenticated users and guests
+ * (e.g. salary stats, submission creation by guests).
  */
-export const optionalAuth = async (
+export const optionalAuth = (
   req: Request,
   _res: Response,
   next: NextFunction
-): Promise<void> => {
-  try {
-    const token = req.cookies?.token;
+): void => {
+  const token = req.cookies?.wg_token as string | undefined;
 
-    if (token) {
-      const decoded = verifyToken(token);
-      const user = await User.findById(decoded.userId);
-      if (user) {
-        req.user = user;
-      }
+  if (token) {
+    const decoded = verifyToken(token);
+    if (decoded) {
+      req.user = { userId: decoded.userId };
     }
-  } catch {
-    // Token invalid or expired — continue as guest
   }
 
+  // Always call next — no DB lookup, no async, instant
   next();
 };

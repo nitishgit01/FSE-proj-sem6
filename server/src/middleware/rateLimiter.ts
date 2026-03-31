@@ -18,11 +18,11 @@ export const globalLimiter = rateLimit({
 });
 
 /**
- * Auth route limiter: 5 requests per hour per IP.
- * Prevents brute-force login attempts.
+ * Auth route limiter: 5 requests per 60 min per IP.
+ * Prevents brute-force login/register attempts.
  */
 export const authLimiter = rateLimit({
-  windowMs: 60 * 60 * 1000, // 1 hour
+  windowMs: 60 * 60 * 1000, // 60 minutes
   max: 5,
   standardHeaders: true,
   legacyHeaders: false,
@@ -30,7 +30,25 @@ export const authLimiter = rateLimit({
     success: false,
     error: {
       code: 'RATE_LIMITED',
-      message: 'Too many authentication attempts. Please wait 15 minutes.',
+      message: 'Too many authentication attempts. Please try again in an hour.',
+    },
+  },
+});
+
+/**
+ * Resend verification limiter: 2 requests per 60 min per IP.
+ * Prevents email spam abuse.
+ */
+export const resendLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000, // 60 minutes
+  max: 2,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: {
+    success: false,
+    error: {
+      code: 'RATE_LIMITED',
+      message: 'Too many verification requests. Please wait before trying again.',
     },
   },
 });
@@ -40,7 +58,7 @@ export const authLimiter = rateLimit({
  * The 30-day per-user limit is enforced at the service layer.
  */
 export const submissionLimiter = rateLimit({
-  windowMs: 60 * 60 * 1000, // 1 hour
+  windowMs: 60 * 60 * 1000,
   max: 10,
   standardHeaders: true,
   legacyHeaders: false,

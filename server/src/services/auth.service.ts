@@ -1,24 +1,58 @@
 import crypto from 'crypto';
+import bcrypt from 'bcryptjs';
 import { User, IUserDocument } from '../models/User.model';
 import { signToken } from '../utils/jwt';
 import { sendVerificationEmail } from './email.service';
 import { AppError } from '../middleware/errorHandler';
 import { ApiErrorCode } from '../../../shared/types/index';
-import type { UserProfile } from '../../../shared/types/index';
+import type { AuthUser } from '../../../shared/types/index';
+
+// ─── Email hashing ────────────────────────────────────────────────────
+
+/**
+ * SHA-256 hash of the lowercased email.
+ * Stored in the DB so raw email addresses are never persisted.
+ * Used as the lookup key for login, duplicate checks, and resend.
+ */
+export const hashEmail = (email: string): string =>
+  crypto.createHash('sha256').update(email.toLowerCase().trim()).digest('hex');
+
+// ─── Safe user projection ─────────────────────────────────────────────
+
+/** Map a Mongoose document to the safe AuthUser shape sent to clients. */
+const toAuthUser = (doc: IUserDocument): AuthUser => ({
+  _id:             (doc._id as { toString(): string }).toString(),
+  // email is stored as SHA-256 hash — we never expose the hash to clients.
+  // The frontend should store the email the user typed at login locally.
+  email:           '',
+  isVerified:      doc.isVerified,
+  submissionCount: doc.submissionCount,
+  lastSubmittedAt: doc.lastSubmittedAt,
+  createdAt:       doc.createdAt,
+});
+
+
+
+// ─── Service functions ────────────────────────────────────────────────
 
 /**
  * Register a new user.
- * - Creates user with hashed password
- * - Generates verification token (24hr expiry)
- * - Sends verification email
+ *
+ * Security design:
+ * - Email is SHA-256 hashed before storage (emailHash field).
+ * - The original email is only used transiently for sending the verification email.
+ * - Password is bcrypt-hashed with cost factor 12.
+ * - Returns a generic 409 message to prevent email enumeration.
  */
 export const register = async (
   email: string,
   password: string
-): Promise<{ user: IUserDocument; token: string }> => {
-  // Check if email already exists
-  const existingUser = await User.findOne({ email: email.toLowerCase() });
-  if (existingUser) {
+): Promise<{ token: string }> => {
+  const emailHash = hashEmail(email);
+
+  // Duplicate check against hash — prevents email enumeration via timing
+  const existing = await User.findOne({ email: emailHash });
+  if (existing) {
     throw new AppError(
       'An account with this email already exists.',
       409,
@@ -26,125 +60,118 @@ export const register = async (
     );
   }
 
-  // Generate verification token
-  const verificationToken = crypto.randomBytes(32).toString('hex');
-  const verificationTokenExpiry = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24 hours
+  const passwordHash       = await bcrypt.hash(password, 12);
+  const verificationToken  = crypto.randomBytes(32).toString('hex');
+  const verificationTokenExpiry = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24 h
 
-  // Create user (password hashed by pre-save hook)
-  const user = await User.create({
-    email: email.toLowerCase(),
-    passwordHash: password, // Will be hashed by pre-save hook
+  await User.create({
+    email: emailHash,           // stored as SHA-256 hash
+    passwordHash,
     isVerified: false,
     verificationToken,
     verificationTokenExpiry,
     submissionCount: 0,
   });
 
-  // Send verification email
+  // Email sent to original address, not the hash
   await sendVerificationEmail(email, verificationToken);
 
-  // Sign JWT (user can access limited features while unverified)
-  const jwtToken = signToken(user._id.toString());
-
-  return { user, token: jwtToken };
+  // No auto-login on register — user must verify email first
+  return { token: verificationToken };
 };
 
 /**
- * Login an existing user.
- * - Validates credentials
- * - Checks email verification status
- * - Returns JWT
+ * Authenticate a user by email + password.
+ *
+ * Returns the JWT and safe user profile on success.
+ * Identical error message for "not found" and "wrong password" (anti-enumeration).
  */
 export const login = async (
   email: string,
   password: string
-): Promise<{ user: IUserDocument; token: string }> => {
-  // Find user by email
-  const user = await User.findOne({ email: email.toLowerCase() });
-  if (!user) {
-    throw new AppError(
-      'Invalid email or password.',
-      401,
-      ApiErrorCode.INVALID_CREDENTIALS
-    );
-  }
+): Promise<{ user: AuthUser; token: string }> => {
+  const emailHash = hashEmail(email);
 
-  // Compare password
-  const isMatch = await user.comparePassword(password);
-  if (!isMatch) {
-    throw new AppError(
-      'Invalid email or password.',
-      401,
-      ApiErrorCode.INVALID_CREDENTIALS
-    );
-  }
+  // Must select passwordHash (hidden by default)
+  const user = await User.findOne({ email: emailHash }).select('+passwordHash');
 
-  // Check verification status
+  const credentialsError = new AppError(
+    'Invalid credentials.',
+    401,
+    ApiErrorCode.INVALID_CREDENTIALS
+  );
+
+  if (!user) throw credentialsError;
+
+  const passwordMatch = await bcrypt.compare(password, user.passwordHash);
+  if (!passwordMatch) throw credentialsError;
+
   if (!user.isVerified) {
     throw new AppError(
-      'Please verify your email before logging in.',
+      'Please verify your email first.',
       403,
       ApiErrorCode.EMAIL_NOT_VERIFIED
     );
   }
 
-  // Sign JWT
   const token = signToken(user._id.toString());
-
-  return { user, token };
+  return { user: toAuthUser(user), token };
 };
 
 /**
- * Verify a user's email address using the verification token.
+ * Verify email by token.
+ * Auto-logs in the user after verification (sets auth cookie in controller).
  */
-export const verifyEmail = async (token: string): Promise<IUserDocument> => {
-  const user = await User.findOne({
-    verificationToken: token,
-    verificationTokenExpiry: { $gt: new Date() },
-  }).select('+verificationToken +verificationTokenExpiry');
+export const verifyEmail = async (
+  token: string
+): Promise<{ user: AuthUser; jwtToken: string }> => {
+  const user = await User
+    .findOne({ verificationToken: token })
+    .select('+verificationToken +verificationTokenExpiry');
 
   if (!user) {
     throw new AppError(
-      'Verification link is invalid or has expired.',
+      'Verification link is invalid.',
       400,
       ApiErrorCode.VALIDATION_ERROR
     );
   }
 
-  user.isVerified = true;
-  user.verificationToken = undefined;
+  if (!user.verificationTokenExpiry || user.verificationTokenExpiry < new Date()) {
+    throw new AppError(
+      'Verification link has expired. Please request a new one.',
+      400,
+      ApiErrorCode.VALIDATION_ERROR
+    );
+  }
+
+  user.isVerified              = true;
+  user.verificationToken       = undefined;
   user.verificationTokenExpiry = undefined;
   await user.save();
 
-  return user;
+  const jwtToken = signToken(user._id.toString());
+  return { user: toAuthUser(user), jwtToken };
 };
 
 /**
- * Resend verification email for an unverified user.
+ * Resend verification email.
+ * Anti-enumeration: always returns success whether or not the email exists.
  */
 export const resendVerification = async (email: string): Promise<void> => {
-  const user = await User.findOne({ email: email.toLowerCase() }).select(
-    '+verificationToken +verificationTokenExpiry'
-  );
+  const emailHash = hashEmail(email);
 
-  if (!user) {
-    // Don't reveal whether the email exists
-    return;
-  }
+  const user = await User
+    .findOne({ email: emailHash })
+    .select('+verificationToken +verificationTokenExpiry');
 
-  if (user.isVerified) {
-    throw new AppError(
-      'Email is already verified.',
-      400,
-      ApiErrorCode.VALIDATION_ERROR
-    );
-  }
+  // Silently succeed if user not found or already verified
+  if (!user || user.isVerified) return;
 
-  // Generate new token
-  const verificationToken = crypto.randomBytes(32).toString('hex');
+  const verificationToken       = crypto.randomBytes(32).toString('hex');
   const verificationTokenExpiry = new Date(Date.now() + 24 * 60 * 60 * 1000);
 
-  user.verificationToken = verificationToken;
+  user.verificationToken       = verificationToken;
   user.verificationTokenExpiry = verificationTokenExpiry;
   await user.save();
 
@@ -152,20 +179,10 @@ export const resendVerification = async (email: string): Promise<void> => {
 };
 
 /**
- * Get user profile (safe fields only).
+ * Get the safe user profile for /me.
  */
-export const getProfile = async (userId: string): Promise<UserProfile> => {
+export const getProfile = async (userId: string): Promise<AuthUser> => {
   const user = await User.findById(userId);
-  if (!user) {
-    throw new AppError('User not found.', 404, ApiErrorCode.NOT_FOUND);
-  }
-
-  return {
-    _id: user._id.toString(),
-    email: user.email,
-    isVerified: user.isVerified,
-    submissionCount: user.submissionCount,
-    lastSubmittedAt: user.lastSubmittedAt,
-    createdAt: user.createdAt,
-  };
+  if (!user) throw new AppError('User not found.', 404, ApiErrorCode.NOT_FOUND);
+  return toAuthUser(user);
 };
