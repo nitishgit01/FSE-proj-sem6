@@ -1,29 +1,30 @@
-name: CI — Build Check
+name: WageGlass CI
 
 on:
   pull_request:
     branches: [main]
-  push:
-    branches: [main]
 
 jobs:
-  build:
+  build-validation:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout code
+      - name: Checkout Code
         uses: actions/checkout@v4
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: 20
+          cache: 'npm'
 
-      - name: Install dependencies
+      - name: Install All Dependencies
         run: npm ci
 
-      - name: TypeScript type-check (server)
-        run: npx tsc --noEmit --project server/tsconfig.json
+      - name: Build Frontend
+        working-directory: ./client
+        run: npm run build
 
-      - name: TypeScript type-check (shared)
-        run: npx tsc --noEmit --project shared/tsconfig.json
+      - name: Build Backend
+        working-directory: ./server
+        run: npm run build

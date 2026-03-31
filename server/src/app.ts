@@ -25,7 +25,15 @@ app.use(helmet());
 // 2. CORS — restrict to known frontend origin
 app.use(
   cors({
-    origin: config.CLIENT_URL,
+    origin: (origin, callback) => {
+      // client URL is from config/env; also allow local dev server
+      const allowed = [config.CLIENT_URL, 'http://localhost:5173'];
+      if (!origin || allowed.includes(origin)) {
+        callback(null, true);
+      } else {
+        callback(new Error('Not allowed by CORS'));
+      }
+    },
     credentials: true, // Required for HttpOnly cookies
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization'],
@@ -56,8 +64,12 @@ if (config.NODE_ENV === 'development') {
 app.use(globalLimiter);
 
 // ── Health Check ──────────────────────────────────────────
-app.get('/health', (_req, res) => {
-  res.status(200).json({ status: 'ok', timestamp: new Date().toISOString() });
+app.get('/api/health', (req, res) => {
+  res.status(200).json({
+    status: 'ok',
+    timestamp: new Date().toISOString(),
+    env: config.NODE_ENV,
+  });
 });
 
 // ── API Routes ────────────────────────────────────────────
