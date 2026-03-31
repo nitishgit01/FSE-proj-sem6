@@ -111,74 +111,8 @@
 
 import { PipelineStage } from 'mongoose';
 import { Submission } from '../models/Submission.model';
+import { buildMatchStage } from '../utils/matchBuilder';
 import type { FilterParams, StatsResult, HistogramBucket, PercentileBreakpoints } from '../../../shared/types/index';
-
-// ─── Sanitisation ─────────────────────────────────────────────────────────────
-
-/**
- * Strip MongoDB operator characters ($ and .) from a string value.
- * Prevents NoSQL injection through filter fields.
- * mongoSanitize() in app.ts handles req.body/query, but this is
- * defense-in-depth for values that reach the service layer directly.
- */
-const sanitise = (v: string): string => v.replace(/[$.'"`\\]/g, '').trim();
-
-/**
- * Clamp a number to the valid yearsExp range [0, 50].
- * Returns undefined for non-finite inputs.
- */
-const clampExp = (v: unknown): number | undefined => {
-  if (typeof v !== 'number' || !Number.isFinite(v)) return undefined;
-  return Math.max(0, Math.min(50, Math.round(v)));
-};
-
-// ─── Match stage builder ──────────────────────────────────────────────────────
-
-/**
- * Build the $match stage from FilterParams.
- * Only includes a field if a valid value is provided.
- * All string values are sanitised before use in the pipeline.
- */
-type MatchStage = Record<string, string | RegExp | { $regex: string; $options: string } | { $gte: number; $lte: number }>;
-
-const buildMatchStage = (filters: FilterParams): MatchStage => {
-  const match: MatchStage = {};
-
-  // jobTitle is required in FilterParams and always included
-  if (filters.jobTitle) {
-    match.jobTitle = sanitise(filters.jobTitle);
-  }
-
-  if (filters.country) {
-    match.country = sanitise(filters.country).toUpperCase().slice(0, 2);
-  }
-
-  if (filters.city) {
-    // Case-insensitive partial match — uses the compound index prefix where possible
-    const safeCity = sanitise(filters.city);
-    if (safeCity) {
-      match.city = { $regex: safeCity, $options: 'i' };
-    }
-  }
-
-  if (filters.workMode) {
-    match.workMode = sanitise(filters.workMode);
-  }
-
-  if (filters.companySize) {
-    match.companySize = sanitise(filters.companySize);
-  }
-
-  const expMin = clampExp(filters.expMin);
-  const expMax = clampExp(filters.expMax);
-
-  if (expMin !== undefined && expMax !== undefined) {
-    // Only apply range if both bounds are finite and valid
-    match.yearsExp = { $gte: expMin, $lte: Math.max(expMin, expMax) };
-  }
-
-  return match;
-};
 
 // ─── Facet result types ────────────────────────────────────────────────────────
 
@@ -207,8 +141,8 @@ interface FacetResult {
 
 // ─── Insufficient sentinel ────────────────────────────────────────────────────
 
-const INSUFFICIENT = (count: number, currency: string): StatsResult => ({
-  count,
+const INSUFFICIENT = (_count: number, currency: string): StatsResult => ({
+  count:        0,     // F4 fix: never expose exact sub-threshold count
   insufficient: true,
   percentiles:  { p10: 0, p25: 0, p50: 0, p75: 0, p90: 0 },
   histogram:    [],

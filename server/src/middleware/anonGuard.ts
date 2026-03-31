@@ -1,79 +1,26 @@
 /**
- * anonGuard.ts
+ * anonGuard.ts — Anonymisation Guard (N ≥ 5)
  *
- * Exports two things:
+ * Prevents the API from returning aggregated salary data when the
+ * matching cohort is too small to preserve individual anonymity.
  *
- * 1. checkAnonymisationThreshold(filters, minCount) — legacy async helper
- *    used by stats.service (kept for backwards compatibility — stats.service
- *    now embeds the count in the $facet and no longer calls this, but it
- *    is preserved in case other services need it).
+ * SECURITY-CRITICAL: The $match query used here MUST be identical to
+ * the one used in stats.service.ts. Both import from the shared
+ * matchBuilder module to guarantee parity.
  *
- * 2. checkMinSubmissions — Express middleware.
- *    Reads filter params from req.query, counts matching Submissions, and
- *    short-circuits with a 200 + { insufficient: true } response when the
- *    count < MIN_SUBMISSIONS.  Sets req.submissionCount on pass-through.
+ * Exports:
+ *   checkAnonymisationThreshold  — legacy async helper (deprecated)
+ *   checkMinSubmissions           — Express middleware for route chains
  */
 
 import { Request, Response, NextFunction } from 'express';
 import { Submission } from '../models/Submission.model';
+import { buildMatchStage } from '../utils/matchBuilder';
 import type { FilterParams } from '../../../shared/types/index';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 const MIN_SUBMISSIONS = 5;
-
-// ─── Shared sanitisation ─────────────────────────────────────────────────────
-
-/** Strip MongoDB operator characters from a filter string value. */
-const sanitise = (v: string): string => v.replace(/[$.'"`\\]/g, '').trim();
-
-/** Clamp yearsExp to [0, 50]; returns undefined for invalid inputs. */
-const clampExp = (v: unknown): number | undefined => {
-  const n = Number(v);
-  if (!Number.isFinite(n)) return undefined;
-  return Math.max(0, Math.min(50, Math.round(n)));
-};
-
-// ─── Shared match builder ─────────────────────────────────────────────────────
-
-type MatchQuery = Record<string, unknown>;
-
-/**
- * Build a MongoDB filter document from FilterParams.
- * Only non-empty, sanitised values are included.
- */
-const buildMatch = (filters: Partial<FilterParams>): MatchQuery => {
-  const match: MatchQuery = {};
-
-  if (filters.jobTitle) {
-    match.jobTitle = sanitise(filters.jobTitle);
-  }
-
-  if (filters.country) {
-    match.country = sanitise(filters.country).toUpperCase().slice(0, 2);
-  }
-
-  if (filters.city) {
-    const safeCity = sanitise(filters.city);
-    if (safeCity) match.city = { $regex: safeCity, $options: 'i' };
-  }
-
-  if (filters.workMode) {
-    match.workMode = sanitise(filters.workMode);
-  }
-
-  if (filters.companySize) {
-    match.companySize = sanitise(filters.companySize);
-  }
-
-  const expMin = clampExp(filters.expMin);
-  const expMax = clampExp(filters.expMax);
-  if (expMin !== undefined && expMax !== undefined) {
-    match.yearsExp = { $gte: expMin, $lte: Math.max(expMin, expMax) };
-  }
-
-  return match;
-};
 
 // ─── TypeScript augmentation ──────────────────────────────────────────────────
 
@@ -90,16 +37,15 @@ declare global {
 
 /**
  * Check whether a filter combination has at least `minCount` submissions.
- * Returns { passes, count }.
  *
  * @deprecated The stats pipeline now computes count inside $facet.
- * Use this only when you need a count check outside an aggregation.
+ *             Use this only when you need a count check outside an aggregation.
  */
 export const checkAnonymisationThreshold = async (
   filters: Partial<FilterParams>,
   minCount: number = MIN_SUBMISSIONS
 ): Promise<{ passes: boolean; count: number }> => {
-  const count = await Submission.countDocuments(buildMatch(filters));
+  const count = await Submission.countDocuments(buildMatchStage(filters));
   return { passes: count >= minCount, count };
 };
 
@@ -108,28 +54,36 @@ export const checkAnonymisationThreshold = async (
 /**
  * Middleware: checkMinSubmissions
  *
- * Guards any route that returns aggregated salary data by ensuring that
- * the matching submission set is large enough to preserve anonymity.
+ * Guards any route that returns aggregated salary data.
  *
  * Flow:
- *   • No jobTitle query param → skip guard (no meaningful filter to check).
- *   • count < 5 → respond 200 with { insufficient: true } and stop.
- *   • count ≥ 5 → set req.submissionCount and call next().
+ *   • No jobTitle, or jobTitle too short → skip guard, call next().
+ *     The controller's Zod validation will reject with 400 if invalid.
+ *   • count < 5 → respond 200 with { insufficient: true } and STOP.
+ *     Never reveals the exact sub-threshold count (always returns 0).
+ *   • count ≥ 5 → set req.submissionCount, call next().
+ *
+ * The service's $facet internally re-checks count < 5 as a final
+ * atomic safety net, so a TOCTOU race here is not exploitable.
  */
 export const checkMinSubmissions = async (
   req:  Request,
   res:  Response,
   next: NextFunction
 ): Promise<void> => {
-  // No jobTitle means the request is too broad to guard meaningfully
-  if (!req.query.jobTitle) {
+  // ── F2 fix: validate type + minimum length ────────────────────────────────
+  // Empty strings are falsy in JS, but we also need to reject single-char
+  // jobTitles that would scan too broadly. If this skips, the controller's
+  // Zod schema (min 2 chars) will reject with 400 — defence in depth.
+  const jobTitle = req.query.jobTitle;
+  if (typeof jobTitle !== 'string' || jobTitle.trim().length < 2) {
     next();
     return;
   }
 
-  // Parse filter params from query string (strings only at this layer)
+  // Parse filter params from query string
   const filters: Partial<FilterParams> = {
-    jobTitle:    typeof req.query.jobTitle    === 'string' ? req.query.jobTitle    : undefined,
+    jobTitle,
     country:     typeof req.query.country     === 'string' ? req.query.country     : undefined,
     city:        typeof req.query.city        === 'string' ? req.query.city        : undefined,
     workMode:    typeof req.query.workMode    === 'string' ? req.query.workMode as FilterParams['workMode']    : undefined,
@@ -139,14 +93,22 @@ export const checkMinSubmissions = async (
   };
 
   try {
-    const count = await Submission.countDocuments(buildMatch(filters));
+    // Uses the SAME buildMatchStage as stats.service → guaranteed parity
+    const count = await Submission.countDocuments(buildMatchStage(filters));
 
     if (count < MIN_SUBMISSIONS) {
+      // ── F4 fix: never reveal exact sub-threshold count ────────────
+      // Returning count: 1, 2, 3, or 4 tells the attacker exactly how
+      // many people in this cohort exist, enabling de-anonymisation
+      // via correlation with public data (LinkedIn, career pages).
       res.status(200).json({
         success: true,
         data: {
-          count,
+          count:        0,    // Always 0 — masked
           insufficient: true,
+          percentiles:  { p10: 0, p25: 0, p50: 0, p75: 0, p90: 0 },
+          histogram:    [],
+          currency:     '',
           message: 'Not enough submissions for this combination. Try broadening your filters.',
         },
       });
@@ -154,7 +116,7 @@ export const checkMinSubmissions = async (
       return;
     }
 
-    // Pass the pre-computed count downstream so routes don't re-query
+    // Pass the pre-computed count downstream
     req.submissionCount = count;
     next();
   } catch (err) {
