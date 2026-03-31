@@ -33,6 +33,7 @@ const parseDuration = (duration: string): number => {
 export const signToken = (userId: string): string =>
   jwt.sign({ userId }, env.JWT_SECRET, {
     expiresIn: parseDuration(env.JWT_EXPIRES_IN),
+    algorithm: 'HS256',
   });
 
 /**
@@ -41,7 +42,9 @@ export const signToken = (userId: string): string =>
  */
 export const verifyToken = (token: string): { userId: string } | null => {
   try {
-    const decoded = jwt.verify(token, env.JWT_SECRET) as JwtPayload;
+    const decoded = jwt.verify(token, env.JWT_SECRET, {
+      algorithms: ['HS256'],
+    }) as JwtPayload;
     return { userId: decoded.userId };
   } catch {
     return null;

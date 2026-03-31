@@ -76,7 +76,8 @@ export const sendVerificationEmail = async (
 
   if (transporter) {
     await transporter.sendMail(mailOptions);
-    console.log(`📧 Verification email sent to ${to}`);
+    const masked = to.substring(0, 3) + '***@' + to.split('@')[1];
+    console.log(`📧 Verification email sent to ${masked}`);
   } else {
     // Dev fallback: log the verification URL
     console.log('──────────────────────────────────────────');

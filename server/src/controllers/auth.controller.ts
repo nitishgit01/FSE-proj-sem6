@@ -3,6 +3,7 @@ import { z } from 'zod';
 import * as authService from '../services/auth.service';
 import { setTokenCookie, clearTokenCookie } from '../utils/jwt';
 import { asyncHandler } from '../utils/asyncHandler';
+import { blacklistToken } from '../utils/tokenBlacklist';
 
 // ─── Validation Schemas ────────────────────────────────────────────────
 
@@ -73,10 +74,14 @@ export const login = asyncHandler(async (
  * POST /api/auth/logout
  */
 export const logout = asyncHandler(async (
-  _req: Request,
+  req: Request,
   res: Response,
   _next: NextFunction
 ): Promise<void> => {
+  // Invalidate the JWT server-side so it can't be replayed
+  const token = req.cookies?.wg_token as string | undefined;
+  if (token) blacklistToken(token);
+
   clearTokenCookie(res);
 
   res.status(200).json({

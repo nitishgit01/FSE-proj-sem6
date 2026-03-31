@@ -17,6 +17,14 @@ import type { AuthUser } from '../../../shared/types/index';
 export const hashEmail = (email: string): string =>
   crypto.createHash('sha256').update(email.toLowerCase().trim()).digest('hex');
 
+/**
+ * SHA-256 hash of a verification token.
+ * Store the hash in DB; send the raw token via email.
+ * Prevents account takeover if DB is compromised.
+ */
+const hashToken = (token: string): string =>
+  crypto.createHash('sha256').update(token).digest('hex');
+
 // ─── Safe user projection ─────────────────────────────────────────────
 
 /** Map a Mongoose document to the safe AuthUser shape sent to clients. */
@@ -68,12 +76,12 @@ export const register = async (
     email: emailHash,           // stored as SHA-256 hash
     passwordHash,
     isVerified: false,
-    verificationToken,
+    verificationToken: hashToken(verificationToken),  // store hash, not raw
     verificationTokenExpiry,
     submissionCount: 0,
   });
 
-  // Email sent to original address, not the hash
+  // Raw token sent to user's inbox — never stored raw
   await sendVerificationEmail(email, verificationToken);
 
   // No auto-login on register — user must verify email first
@@ -126,7 +134,7 @@ export const verifyEmail = async (
   token: string
 ): Promise<{ user: AuthUser; jwtToken: string }> => {
   const user = await User
-    .findOne({ verificationToken: token })
+    .findOne({ verificationToken: hashToken(token) })  // look up by hash
     .select('+verificationToken +verificationTokenExpiry');
 
   if (!user) {
@@ -171,11 +179,11 @@ export const resendVerification = async (email: string): Promise<void> => {
   const verificationToken       = crypto.randomBytes(32).toString('hex');
   const verificationTokenExpiry = new Date(Date.now() + 24 * 60 * 60 * 1000);
 
-  user.verificationToken       = verificationToken;
+  user.verificationToken       = hashToken(verificationToken);  // store hash
   user.verificationTokenExpiry = verificationTokenExpiry;
   await user.save();
 
-  await sendVerificationEmail(email, verificationToken);
+  await sendVerificationEmail(email, verificationToken);  // send raw
 };
 
 /**

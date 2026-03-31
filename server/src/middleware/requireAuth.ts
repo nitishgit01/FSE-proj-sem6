@@ -1,5 +1,6 @@
 import { Request, Response, NextFunction } from 'express';
 import { verifyToken } from '../utils/jwt';
+import { isBlacklisted } from '../utils/tokenBlacklist';
 
 /**
  * Extend Express Request so TypeScript knows about req.user.
@@ -16,8 +17,8 @@ declare global {
 
 /**
  * Middleware: Requires a valid JWT in the 'wg_token' HttpOnly cookie.
+ * Rejects blacklisted tokens (post-logout).
  * Attaches { userId } to req.user on success.
- * Returns 401 on missing or invalid token — no DB lookup performed here.
  */
 export const requireAuth = (
   req: Request,
@@ -32,6 +33,18 @@ export const requireAuth = (
       error: {
         code: 'UNAUTHORIZED',
         message: 'Authentication required. Please log in.',
+      },
+    });
+    return;
+  }
+
+  // Reject tokens that have been invalidated by logout
+  if (isBlacklisted(token)) {
+    res.status(401).json({
+      success: false,
+      error: {
+        code: 'UNAUTHORIZED',
+        message: 'Session has been invalidated. Please log in again.',
       },
     });
     return;
@@ -53,3 +66,4 @@ export const requireAuth = (
   req.user = { userId: decoded.userId };
   next();
 };
+

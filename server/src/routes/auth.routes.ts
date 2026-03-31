@@ -15,7 +15,7 @@ const router = Router();
 // Public — rate-limited
 router.post('/register',             authLimiter,   register);
 router.post('/login',                authLimiter,   login);
-router.get( '/verify/:token',                       verifyEmail);
+router.get( '/verify/:token',        authLimiter,   verifyEmail);
 router.post('/resend-verification',  resendLimiter, resendVerification);
 
 // Protected

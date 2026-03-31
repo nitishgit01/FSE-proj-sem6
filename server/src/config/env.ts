@@ -83,7 +83,14 @@ export interface EnvConfig {
 export const config: EnvConfig = {
   // Required
   MONGO_URI: required('MONGO_URI'),
-  JWT_SECRET: required('JWT_SECRET'),
+  JWT_SECRET: (() => {
+    const secret = required('JWT_SECRET');
+    if (secret.length < 32) {
+      console.error('❌ JWT_SECRET must be at least 32 characters for HS256 security.');
+      process.exit(1);
+    }
+    return secret;
+  })(),
   JWT_EXPIRES_IN: required('JWT_EXPIRES_IN'),
   CLIENT_URL: required('CLIENT_URL'),
 
