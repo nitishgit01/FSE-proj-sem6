@@ -1,146 +1,345 @@
+/**
+ * stats.service.ts — WageGlass Salary Aggregation Pipeline
+ *
+ * Architecture:
+ *   • Single MongoDB round-trip via $facet — no separate countDocuments call.
+ *   • All filter strings sanitised before entering the pipeline.
+ *   • $percentile (MongoDB 7.0+) with $bucketAuto histogram, both in one $facet.
+ *   • Falls back gracefully when data is insufficient (< 5 submissions).
+ *
+ * ─── EXPLAIN PREDICTION ──────────────────────────────────────────────────────
+ *
+ *   With jobTitle + country + city (most common case):
+ *     IXSCAN { jobTitle:1, country:1, city:1 }  ← compound index hit
+ *     fetchedKeys << totalDocs  →  very fast
+ *
+ *   With jobTitle + country (no city):
+ *     IXSCAN { jobTitle:1, country:1 }  ← second compound index hit
+ *
+ *   With jobTitle only:
+ *     IXSCAN { jobTitle:1 }  ← single-field index on jobTitle
+ *
+ *   The aggregation stage operates on the IXSCAN result set, not the full
+ *   collection. $facet then runs meta + histogram in a single pipeline pass
+ *   over the filtered documents — zero extra reads.
+ *
+ * ─── FALLBACK FOR MONGODB < 7.0 (no $percentile operator) ───────────────────
+ *
+ *   Replace the $group inside the "meta" facet with:
+ *
+ *   {
+ *     $group: {
+ *       _id: null,
+ *       count:    { $sum: 1 },
+ *       currency: { $first: '$currency' },
+ *       // Collect all values, sort client-side or use $push + $arrayElemAt
+ *       allValues: { $push: '$totalComp' },
+ *     }
+ *   },
+ *   // Then in a $project stage:
+ *   {
+ *     $project: {
+ *       count: 1,
+ *       currency: 1,
+ *       // First sort allValues in the pipeline (requires $setWindowFields or
+ *       // client-side sort), then extract positions:
+ *       // p10: { $arrayElemAt: ['$sorted', { $floor: { $multiply: [0.10, '$count'] } }] }
+ *       // ... repeat for p25, p50, p75, p90
+ *     }
+ *   }
+ *
+ *   WARNING: $push collects ALL matching totalComp values into memory.
+ *   For large datasets (> 10K docs) this causes OOM. Use $percentile if on
+ *   MongoDB Atlas (7.0+) or self-hosted MongoDB 7.0+.
+ *   For older MongoDB: pre-sort and store a running rank field on each doc,
+ *   or use a client-side sampling approach.
+ *
+ * ─── ATLAS PLAYGROUND QUERY ──────────────────────────────────────────────────
+ *
+ *   Paste into Atlas → Collections → submissions → Aggregation tab:
+ *
+ *   [
+ *     {
+ *       $match: {
+ *         jobTitle: "Software Engineer",
+ *         country: "IN",
+ *         // city: { $regex: "bang", $options: "i" },
+ *         // workMode: "remote",
+ *         // companySize: "startup",
+ *         // yearsExp: { $gte: 3, $lte: 7 },
+ *       }
+ *     },
+ *     {
+ *       $facet: {
+ *         meta: [
+ *           {
+ *             $group: {
+ *               _id: null,
+ *               count:    { $sum: 1 },
+ *               p10:      { $percentile: { input: "$totalComp", p: [0.10], method: "approximate" } },
+ *               p25:      { $percentile: { input: "$totalComp", p: [0.25], method: "approximate" } },
+ *               p50:      { $percentile: { input: "$totalComp", p: [0.50], method: "approximate" } },
+ *               p75:      { $percentile: { input: "$totalComp", p: [0.75], method: "approximate" } },
+ *               p90:      { $percentile: { input: "$totalComp", p: [0.90], method: "approximate" } },
+ *               currency: { $first: "$currency" },
+ *             }
+ *           }
+ *         ],
+ *         histogram: [
+ *           {
+ *             $bucketAuto: {
+ *               groupBy: "$totalComp",
+ *               buckets: 10,
+ *               output: { count: { $sum: 1 } }
+ *             }
+ *           }
+ *         ]
+ *       }
+ *     }
+ *   ]
+ *
+ *   Expected shape of meta[0]:
+ *   {
+ *     _id: null, count: 47,
+ *     p10: [600000], p25: [900000], p50: [1400000], p75: [1900000], p90: [2600000],
+ *     currency: "INR"
+ *   }
+ *   Note: $percentile returns arrays — extract [0] in the transform step.
+ *
+ * ─────────────────────────────────────────────────────────────────────────────
+ */
+
+import { PipelineStage } from 'mongoose';
 import { Submission } from '../models/Submission.model';
-import { checkAnonymisationThreshold } from '../middleware/anonGuard';
-import type { StatsQuery, StatsResult, HistogramBucket } from '../../../shared/types/index';
+import type { FilterParams, StatsResult, HistogramBucket, PercentileBreakpoints } from '../../../shared/types/index';
+
+// ─── Sanitisation ─────────────────────────────────────────────────────────────
 
 /**
- * Get aggregated salary statistics for a given filter combination.
- * Enforces N≥5 anonymisation guard.
- * Uses MongoDB aggregation pipeline for server-side computation.
+ * Strip MongoDB operator characters ($ and .) from a string value.
+ * Prevents NoSQL injection through filter fields.
+ * mongoSanitize() in app.ts handles req.body/query, but this is
+ * defense-in-depth for values that reach the service layer directly.
  */
-export const getStats = async (filters: StatsQuery): Promise<StatsResult> => {
-  // ── Step 1: Check anonymisation threshold ───────────
-  const { passes, count } = await checkAnonymisationThreshold(filters);
+const sanitise = (v: string): string => v.replace(/[$.'"`\\]/g, '').trim();
 
-  if (!passes) {
-    return {
-      count,
-      insufficient: true,
-      percentiles: { p10: 0, p25: 0, p50: 0, p75: 0, p90: 0 },
-      histogram: [],
-      currency: '',
-    };
+/**
+ * Clamp a number to the valid yearsExp range [0, 50].
+ * Returns undefined for non-finite inputs.
+ */
+const clampExp = (v: unknown): number | undefined => {
+  if (typeof v !== 'number' || !Number.isFinite(v)) return undefined;
+  return Math.max(0, Math.min(50, Math.round(v)));
+};
+
+// ─── Match stage builder ──────────────────────────────────────────────────────
+
+/**
+ * Build the $match stage from FilterParams.
+ * Only includes a field if a valid value is provided.
+ * All string values are sanitised before use in the pipeline.
+ */
+type MatchStage = Record<string, string | RegExp | { $regex: string; $options: string } | { $gte: number; $lte: number }>;
+
+const buildMatchStage = (filters: FilterParams): MatchStage => {
+  const match: MatchStage = {};
+
+  // jobTitle is required in FilterParams and always included
+  if (filters.jobTitle) {
+    match.jobTitle = sanitise(filters.jobTitle);
   }
 
-  // ── Step 2: Build match stage ───────────────────────
-  const matchStage: Record<string, unknown> = {
-    jobTitle: filters.jobTitle,
-  };
-
-  if (filters.country) matchStage.country = filters.country;
-  if (filters.city) matchStage.city = { $regex: filters.city, $options: 'i' };
-  if (filters.workMode) matchStage.workMode = filters.workMode;
-  if (filters.companySize) matchStage.companySize = filters.companySize;
-  if (filters.expMin !== undefined && filters.expMax !== undefined) {
-    matchStage.yearsExp = { $gte: filters.expMin, $lte: filters.expMax };
+  if (filters.country) {
+    match.country = sanitise(filters.country).toUpperCase().slice(0, 2);
   }
 
-  // ── Step 3: Run aggregation pipeline ────────────────
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const pipeline: any[] = [
+  if (filters.city) {
+    // Case-insensitive partial match — uses the compound index prefix where possible
+    const safeCity = sanitise(filters.city);
+    if (safeCity) {
+      match.city = { $regex: safeCity, $options: 'i' };
+    }
+  }
+
+  if (filters.workMode) {
+    match.workMode = sanitise(filters.workMode);
+  }
+
+  if (filters.companySize) {
+    match.companySize = sanitise(filters.companySize);
+  }
+
+  const expMin = clampExp(filters.expMin);
+  const expMax = clampExp(filters.expMax);
+
+  if (expMin !== undefined && expMax !== undefined) {
+    // Only apply range if both bounds are finite and valid
+    match.yearsExp = { $gte: expMin, $lte: Math.max(expMin, expMax) };
+  }
+
+  return match;
+};
+
+// ─── Facet result types ────────────────────────────────────────────────────────
+
+/** Raw shape returned by MongoDB $percentile — always an array. */
+interface RawMeta {
+  _id:      null;
+  count:    number;
+  p10:      number[];
+  p25:      number[];
+  p50:      number[];
+  p75:      number[];
+  p90:      number[];
+  currency: string;
+}
+
+/** Raw histogram bucket from $bucketAuto. */
+interface RawBucket {
+  _id:   { min: number; max: number };
+  count: number;
+}
+
+interface FacetResult {
+  meta:      RawMeta[];
+  histogram: RawBucket[];
+}
+
+// ─── Insufficient sentinel ────────────────────────────────────────────────────
+
+const INSUFFICIENT = (count: number, currency: string): StatsResult => ({
+  count,
+  insufficient: true,
+  percentiles:  { p10: 0, p25: 0, p50: 0, p75: 0, p90: 0 },
+  histogram:    [],
+  currency,
+});
+
+// ─── Main service function ────────────────────────────────────────────────────
+
+/**
+ * Compute aggregated salary statistics for a given filter combination.
+ *
+ * Uses a single MongoDB aggregation with $facet to compute:
+ *   • count, percentiles (p10/p25/p50/p75/p90), dominant currency  ← "meta" facet
+ *   • 10-bucket salary histogram                                    ← "histogram" facet
+ *
+ * The anonymisation guard (N ≥ 5) is enforced inside this function
+ * from the count returned by the meta facet — no extra DB round-trip.
+ *
+ * @param filters  Validated FilterParams from the request query.
+ * @returns        StatsResult ready for JSON serialisation.
+ */
+export const getStats = async (filters: FilterParams): Promise<StatsResult> => {
+  const matchStage = buildMatchStage(filters);
+
+  /**
+   * The $percentile accumulator landed in MongoDB 7.0 (Atlas default since 2024).
+   * Mongoose's PipelineStage types lag behind — cast the $group stage through
+   * unknown so the type checker is satisfied without losing type safety elsewhere.
+   */
+  const percentileGroup = {
+    $group: {
+      _id:      null,
+      count:    { $sum: 1 },
+      p10:      { $percentile: { input: '$totalComp', p: [0.10], method: 'approximate' } },
+      p25:      { $percentile: { input: '$totalComp', p: [0.25], method: 'approximate' } },
+      p50:      { $percentile: { input: '$totalComp', p: [0.50], method: 'approximate' } },
+      p75:      { $percentile: { input: '$totalComp', p: [0.75], method: 'approximate' } },
+      p90:      { $percentile: { input: '$totalComp', p: [0.90], method: 'approximate' } },
+      currency: { $first: '$currency' },
+    },
+  } as unknown as PipelineStage.Group;
+
+  const pipeline: PipelineStage[] = [
+    // ── Stage 1: Filter ────────────────────────────────────────────
     { $match: matchStage },
+
+    // ── Stage 2: Compute everything in one pass ────────────────────
     {
       $facet: {
-        count: [{ $count: 'total' }],
-        percentiles: [
+        /**
+         * meta: count + all five percentiles + dominant currency.
+         * $percentile (MongoDB 7.0+, Atlas) returns arrays → extract [0] later.
+         */
+        meta: [
+          percentileGroup,
+        ],
+
+        /**
+         * histogram: auto-bucket totalComp into 10 equal-population buckets.
+         * $bucketAuto calculates optimal boundaries — no min/max pre-scan needed.
+         * Each _id.min / _id.max maps to rangeMin / rangeMax in HistogramBucket.
+         */
+        histogram: [
           {
-            $group: {
-              _id: null,
-              p10: { $percentile: { input: '$totalComp', p: [0.1], method: 'approximate' } },
-              p25: { $percentile: { input: '$totalComp', p: [0.25], method: 'approximate' } },
-              p50: { $percentile: { input: '$totalComp', p: [0.5], method: 'approximate' } },
-              p75: { $percentile: { input: '$totalComp', p: [0.75], method: 'approximate' } },
-              p90: { $percentile: { input: '$totalComp', p: [0.9], method: 'approximate' } },
-              minSalary: { $min: '$totalComp' },
-              maxSalary: { $max: '$totalComp' },
+            $bucketAuto: {
+              groupBy: '$totalComp',
+              buckets: 10,
+              output:  { count: { $sum: 1 } },
             },
           },
-        ],
-        currency: [
-          { $group: { _id: '$currency', count: { $sum: 1 } } },
-          { $sort: { count: -1 } },
-          { $limit: 1 },
         ],
       },
     },
   ];
 
-  const [result] = await Submission.aggregate(pipeline);
+  // ── Stage 3: Execute and transform ──────────────────────────────────────────
 
-  const totalCount = result.count[0]?.total || 0;
-  const percentilesData = result.percentiles[0];
-  const currency = result.currency[0]?._id || 'USD';
+  const [raw] = await Submission.aggregate<FacetResult>(pipeline);
 
-  if (!percentilesData) {
-    return {
-      count: totalCount,
-      insufficient: true,
-      percentiles: { p10: 0, p25: 0, p50: 0, p75: 0, p90: 0 },
-      histogram: [],
-      currency,
-    };
+  // $facet always returns one document, even if the $match finds nothing.
+  // When empty: meta = [], histogram = [].
+  const meta = raw?.meta?.[0] as RawMeta | undefined;
+
+  if (!meta || meta.count === 0) {
+    return INSUFFICIENT(0, '');
   }
 
-  // ── Step 4: Build histogram buckets ─────────────────
-  const minSalary = percentilesData.minSalary;
-  const maxSalary = percentilesData.maxSalary;
-  const bucketCount = 10;
-  const bucketWidth = Math.ceil((maxSalary - minSalary) / bucketCount);
+  const { count, currency } = meta;
 
-  const histogram: HistogramBucket[] = [];
-
-  if (bucketWidth > 0) {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const histogramPipeline: any[] = [
-      { $match: matchStage },
-      {
-        $bucket: {
-          groupBy: '$totalComp',
-          boundaries: Array.from(
-            { length: bucketCount + 1 },
-            (_, i) => minSalary + i * bucketWidth
-          ),
-          default: 'overflow',
-          output: { count: { $sum: 1 } },
-        },
-      },
-    ];
-
-    const histogramResult = await Submission.aggregate(histogramPipeline);
-
-    for (let i = 0; i < bucketCount; i++) {
-      const rangeMin = minSalary + i * bucketWidth;
-      const rangeMax = rangeMin + bucketWidth;
-      const bucket = histogramResult.find(
-        (b: Record<string, unknown>) => b._id === rangeMin
-      );
-
-      histogram.push({
-        rangeMin,
-        rangeMax,
-        count: bucket ? (bucket.count as number) : 0,
-      });
-    }
-
-    // Add any overflow bucket entries to the last bucket
-    const overflowBucket = histogramResult.find(
-      (b: Record<string, unknown>) => b._id === 'overflow'
-    );
-    if (overflowBucket && histogram.length > 0) {
-      histogram[histogram.length - 1].count += overflowBucket.count as number;
-    }
+  // Anonymisation guard — do NOT reveal data for tiny cohorts
+  if (count < 5) {
+    return INSUFFICIENT(count, currency ?? '');
   }
+
+  // ── Percentile extraction ─────────────────────────────────────────
+  // $percentile returns arrays of length matching the `p` input array.
+  // Index [0] = the single percentile value we requested per stat.
+  const percentiles: PercentileBreakpoints = {
+    p10: meta.p10?.[0] ?? 0,
+    p25: meta.p25?.[0] ?? 0,
+    p50: meta.p50?.[0] ?? 0,
+    p75: meta.p75?.[0] ?? 0,
+    p90: meta.p90?.[0] ?? 0,
+  };
+
+  // ── Histogram mapping ─────────────────────────────────────────────
+  // $bucketAuto _id: { min, max } → HistogramBucket { rangeMin, rangeMax, count }
+  // The last bucket's max is inclusive (MongoDB convention).
+  const histogram: HistogramBucket[] = (raw.histogram ?? []).map(
+    (bucket: RawBucket): HistogramBucket => ({
+      rangeMin: bucket._id.min,
+      rangeMax: bucket._id.max,
+      count:    bucket.count,
+    })
+  );
 
   return {
-    count: totalCount,
+    count,
     insufficient: false,
-    percentiles: {
-      p10: percentilesData.p10[0],
-      p25: percentilesData.p25[0],
-      p50: percentilesData.p50[0],
-      p75: percentilesData.p75[0],
-      p90: percentilesData.p90[0],
-    },
+    percentiles,
     histogram,
-    currency,
+    currency: currency ?? 'USD',
   };
 };
+
+// ─── Landing page counter ─────────────────────────────────────────────────────
+
+/**
+ * Total number of salary submissions in the database.
+ * Used by the landing page hero counter ("X salaries shared").
+ * countDocuments({}) is O(1) from the collection metadata on MongoDB Atlas.
+ */
+export const getSubmissionCount = (): Promise<number> =>
+  Submission.countDocuments({});

@@ -1,9 +1,12 @@
 import { Router } from 'express';
-import { getStats } from '../controllers/stats.controller';
+import { getStats, getCount } from '../controllers/stats.controller';
+import { globalLimiter } from '../middleware/rateLimiter';
 
 const router = Router();
 
-// GET /api/stats — public endpoint, no auth required
-router.get('/', getStats);
+// GET /api/stats        — aggregated salary statistics (public, cached by CDN)
+// GET /api/stats/count  — total submission count for landing page
+router.get('/',      globalLimiter, getStats);
+router.get('/count', globalLimiter, getCount);
 
 export default router;
