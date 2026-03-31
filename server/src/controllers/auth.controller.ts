@@ -4,6 +4,12 @@ import * as authService from '../services/auth.service';
 import { setTokenCookie, clearTokenCookie } from '../utils/jwt';
 import { asyncHandler } from '../utils/asyncHandler';
 import { blacklistToken } from '../utils/tokenBlacklist';
+import {
+  isLockedOut,
+  getLockoutMinutes,
+  recordFailedAttempt,
+  clearAttempts,
+} from '../utils/loginAttempts';
 
 // ─── Validation Schemas ────────────────────────────────────────────────
 
@@ -58,16 +64,39 @@ export const login = asyncHandler(async (
   res: Response,
   _next: NextFunction
 ): Promise<void> => {
+  const ip = (req.ip ?? req.socket.remoteAddress ?? 'unknown').replace(/^::ffff:/, '');
+
+  // Check IP-based lockout before touching the DB
+  if (isLockedOut(ip)) {
+    const minutesLeft = getLockoutMinutes(ip);
+    res.status(429).json({
+      success: false,
+      error: {
+        code: 'RATE_LIMITED',
+        message: `Too many failed attempts. Try again in ${minutesLeft} minute${minutesLeft !== 1 ? 's' : ''}.`,
+      },
+    });
+    return;
+  }
+
   const { email, password } = loginSchema.parse(req.body);
 
-  const { user, token } = await authService.login(email, password);
+  try {
+    const { user, token } = await authService.login(email, password);
 
-  setTokenCookie(res, token);
+    // Successful login — reset failure counter
+    clearAttempts(ip);
+    setTokenCookie(res, token);
 
-  res.status(200).json({
-    success: true,
-    data: { user },
-  });
+    res.status(200).json({
+      success: true,
+      data: { user },
+    });
+  } catch (err) {
+    // Record the failure; block after MAX_ATTEMPTS
+    recordFailedAttempt(ip);
+    throw err; // re-throw so asyncHandler/errorHandler formats the response
+  }
 });
 
 /**

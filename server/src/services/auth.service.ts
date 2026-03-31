@@ -56,16 +56,19 @@ export const register = async (
   email: string,
   password: string
 ): Promise<{ token: string }> => {
+  const startTime = Date.now();
   const emailHash = hashEmail(email);
 
-  // Duplicate check against hash — prevents email enumeration via timing
   const existing = await User.findOne({ email: emailHash });
+
   if (existing) {
-    throw new AppError(
-      'An account with this email already exists.',
-      409,
-      ApiErrorCode.DUPLICATE_EMAIL
-    );
+    // Always burn the same time as the real path (bcrypt ~250ms) so timing
+    // cannot reveal whether the email was already registered.
+    await bcrypt.hash('dummy-timing-padding', 12);
+    const elapsed = Date.now() - startTime;
+    if (elapsed < 300) await new Promise(r => setTimeout(r, 300 - elapsed));
+    // Return the same shape — controller returns the same 200 message
+    return { token: '' };
   }
 
   const passwordHash       = await bcrypt.hash(password, 12);
@@ -87,6 +90,7 @@ export const register = async (
   // No auto-login on register — user must verify email first
   return { token: verificationToken };
 };
+
 
 /**
  * Authenticate a user by email + password.
