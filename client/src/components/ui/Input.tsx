@@ -12,14 +12,14 @@ interface InputProps extends React.InputHTMLAttributes<HTMLInputElement> {
  * Includes label, error message, and secondary hint support.
  * Focus ring-offset is set to 0 for a cleaner look.
  */
-export const Input: React.FC<InputProps> = ({
+export const Input = React.forwardRef<HTMLInputElement, InputProps>(({
   label,
   error,
   hint,
   id,
   className = '',
   ...props
-}) => {
+}, ref) => {
   const inputId = id || `input-${label?.toLowerCase().replace(/\s+/g, '-')}`;
 
   return (
@@ -35,6 +35,7 @@ export const Input: React.FC<InputProps> = ({
       
       <div className="relative">
         <input
+          ref={ref}
           id={inputId}
           className={`
             w-full px-4 py-2.5 bg-white border rounded-lg 
@@ -70,6 +71,6 @@ export const Input: React.FC<InputProps> = ({
       ) : null}
     </div>
   );
-};
+});
 
 export default Input;
