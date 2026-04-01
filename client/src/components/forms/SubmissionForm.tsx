@@ -1,7 +1,8 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { toast } from 'react-hot-toast';
+import { useNavigate } from 'react-router-dom';
 
 import { StepProgress } from '../ui/StepProgress';
 import { Button } from '../ui/Button';
@@ -9,15 +10,43 @@ import { Step1RoleEmployer } from './Step1RoleEmployer';
 import { Step2Compensation } from './Step2Compensation';
 import { Step3LocationContext } from './Step3LocationContext';
 import { fullSchema, STEP_FIELDS, type FormData } from './submissionSchema';
+import { useSubmitSalary } from '../../hooks/useSubmitSalary';
+import { useAuth } from '../../hooks/useAuth';
 
 // Re-export FormData for consumers that need it (no circular dep)
 export type { FormData };
 
 const STEP_LABELS = ['Your Role', 'Compensation', 'Location'];
 
+// ── Rate-limit helpers ────────────────────────────────────────────────────────
+
+const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1000;
+
+function getNextEligibleDate(lastSubmittedAt: Date | string | undefined): Date | null {
+  if (!lastSubmittedAt) return null;
+  const last = new Date(lastSubmittedAt);
+  if (isNaN(last.getTime())) return null;
+  const elapsed = Date.now() - last.getTime();
+  if (elapsed >= THIRTY_DAYS_MS) return null;
+  return new Date(last.getTime() + THIRTY_DAYS_MS);
+}
+
+// ── Component ─────────────────────────────────────────────────────────────────
+
 const SubmissionForm: React.FC = () => {
   const [currentStep, setCurrentStep] = useState<1 | 2 | 3>(1);
-  const [isSubmitting, setIsSubmitting] = useState(false);
+  const navigate = useNavigate();
+  const { mutate: submitSalary, isPending } = useSubmitSalary();
+  const { user } = useAuth();
+
+  // ── Client-side rate-limit check ─────────────────────────────────────────────
+  // If the user is logged in and submitted within the last 30 days, show a banner
+  // and disable the submit button. The server enforces this too — this is just UX.
+  const rateLimitDate = useMemo(
+    () => getNextEligibleDate(user?.lastSubmittedAt),
+    [user?.lastSubmittedAt]
+  );
+  const isRateLimited = rateLimitDate !== null;
 
   const form = useForm<FormData>({
     resolver: zodResolver(fullSchema),
@@ -39,7 +68,7 @@ const SubmissionForm: React.FC = () => {
     },
   });
 
-  const { register, control, formState: { errors }, trigger, watch, handleSubmit } = form;
+  const { register, control, formState: { errors }, trigger, watch, handleSubmit, setError } = form;
 
   const handleNext = async () => {
     const fields = STEP_FIELDS[currentStep];
@@ -55,21 +84,75 @@ const SubmissionForm: React.FC = () => {
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
-  const onSubmit = async (data: FormData) => {
-    setIsSubmitting(true);
-    await new Promise((resolve) => setTimeout(resolve, 1200));
-    console.log('Form data:', data);
-    toast.success('Mock submit — API not connected yet', {
-      duration: 4000,
-      icon: '🚀',
+  // ── Real API submit ──────────────────────────────────────────────────────────
+  const onSubmit = (data: FormData) => {
+    submitSalary(data, {
+      onSuccess: (response) => {
+        navigate('/submit/success', {
+          state: {
+            submissionId: response.data.submissionId,
+            formData: data,
+          },
+        });
+      },
+      onError: (error: unknown) => {
+        const err = error as {
+          code?: string;
+          message?: string;
+          fields?: Record<string, string>;
+          nextEligibleDate?: string;
+        };
+
+        if (err.code === 'RATE_LIMITED') {
+          const nextDate = err.nextEligibleDate
+            ? new Date(err.nextEligibleDate).toLocaleDateString('en-IN', {
+                day: 'numeric', month: 'long', year: 'numeric',
+              })
+            : 'next month';
+          toast.error(`Already submitted this month. Next eligible: ${nextDate}`, {
+            duration: 6000,
+          });
+        } else if (err.code === 'VALIDATION_ERROR' && err.fields) {
+          // Server-side field errors → wire back into react-hook-form
+          Object.entries(err.fields).forEach(([field, message]) => {
+            setError(field as keyof FormData, { message: message as string });
+          });
+          toast.error('Please fix the errors below.');
+        } else {
+          toast.error(err.message ?? 'Something went wrong. Please try again.');
+        }
+      },
     });
-    setIsSubmitting(false);
   };
 
   const commonProps = { register, control, errors, watch };
 
   return (
     <div className="flex flex-col space-y-8">
+
+      {/* ── Rate-limit banner (non-dismissable) ────────────────────────── */}
+      {isRateLimited && (
+        <div
+          role="alert"
+          className="flex items-start gap-3 bg-amber-50 border border-amber-200 rounded-2xl px-5 py-4"
+        >
+          <span className="text-xl flex-shrink-0">⏳</span>
+          <div>
+            <p className="text-sm font-semibold text-amber-800">
+              You've already submitted this month.
+            </p>
+            <p className="text-xs text-amber-700 mt-0.5">
+              Next eligible submission date:{' '}
+              <strong>
+                {rateLimitDate!.toLocaleDateString('en-IN', {
+                  day: 'numeric', month: 'long', year: 'numeric',
+                })}
+              </strong>
+            </p>
+          </div>
+        </div>
+      )}
+
       <StepProgress
         currentStep={currentStep}
         totalSteps={3}
@@ -99,11 +182,13 @@ const SubmissionForm: React.FC = () => {
           <Button
             variant="primary"
             size="md"
-            isLoading={isSubmitting}
+            isLoading={isPending}
+            disabled={isPending || isRateLimited}
             onClick={handleSubmit(onSubmit)}
             type="button"
+            id="submit-salary-btn"
           >
-            Submit →
+            {isPending ? 'Submitting…' : 'Submit →'}
           </Button>
         )}
       </div>
