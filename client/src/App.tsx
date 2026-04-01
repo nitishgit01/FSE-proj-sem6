@@ -4,6 +4,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { AuthProvider } from './hooks/useAuth';
 import Navbar from './components/layout/Navbar';
 import SubmitPage from './pages/SubmitPage';
+import SuccessPage from './pages/SuccessPage';
 import DashboardPage from './pages/DashboardPage';
 import LoginPage from './pages/LoginPage';
 import RegisterPage from './pages/RegisterPage';
@@ -22,16 +23,17 @@ function App() {
             <main className="flex-1">
               <Routes>
                 {/* Auth */}
-                <Route path="/login"         element={<LoginPage />} />
-                <Route path="/register"      element={<RegisterPage />} />
+                <Route path="/login"              element={<LoginPage />} />
+                <Route path="/register"           element={<RegisterPage />} />
                 <Route path="/verify-email/:token" element={<VerifyEmailPage />} />
 
                 {/* App */}
-                <Route path="/submit"    element={<SubmitPage />} />
-                <Route path="/dashboard" element={<DashboardPage />} />
+                <Route path="/submit"         element={<SubmitPage />} />
+                <Route path="/submit/success" element={<SuccessPage />} />
+                <Route path="/dashboard"      element={<DashboardPage />} />
 
                 {/* Redirects */}
-                <Route path="/"   element={<Navigate to="/dashboard" replace />} />
+                <Route path="/"      element={<Navigate to="/dashboard" replace />} />
                 <Route path="/stats" element={<Navigate to="/dashboard" replace />} />
               </Routes>
             </main>
