@@ -43,12 +43,18 @@ export const Step1RoleEmployer: React.FC<Step1Props> = ({
       </div>
 
       {/* Job Title */}
-      <Input
-        label="Job Title"
-        placeholder="e.g. Software Engineer II"
-        error={errors.jobTitle?.message}
-        hint="Use your official job title for accurate comparisons."
-        {...register('jobTitle')}
+      <Controller
+        name="jobTitle"
+        control={control}
+        render={({ field }) => (
+          <Input
+            {...field}
+            label="Job Title"
+            placeholder="e.g. Software Engineer II"
+            error={errors.jobTitle?.message}
+            hint="Use your official job title for accurate comparisons."
+          />
+        )}
       />
 
       {/* Industry */}
@@ -57,24 +63,29 @@ export const Step1RoleEmployer: React.FC<Step1Props> = ({
         control={control}
         render={({ field }) => (
           <Select
+            {...field}
             label="Industry"
             options={INDUSTRY_OPTIONS}
             placeholder="Select your industry"
             error={errors.industry?.message}
             value={field.value ?? ''}
-            onChange={field.onChange}
-            onBlur={field.onBlur}
           />
         )}
       />
 
       {/* Company (optional) */}
-      <Input
-        label="Company"
-        placeholder="Company name (optional)"
-        error={errors.company?.message}
-        hint="Leave blank to stay fully anonymous. We never display company names."
-        {...register('company')}
+      <Controller
+        name="company"
+        control={control}
+        render={({ field }) => (
+          <Input
+            {...field}
+            label="Company"
+            placeholder="Company name (optional)"
+            error={errors.company?.message}
+            hint="Leave blank to stay fully anonymous. We never display company names."
+          />
+        )}
       />
 
       {/* Company Size */}

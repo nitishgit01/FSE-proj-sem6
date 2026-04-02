@@ -87,11 +87,11 @@ export const Step2Compensation: React.FC<Step2Props> = ({
       />
 
       {/* Base Salary — slider + synced number input */}
-      <div className="flex flex-col space-y-3">
-        <Controller
-          name="baseSalary"
-          control={control}
-          render={({ field }) => (
+      <Controller
+        name="baseSalary"
+        control={control}
+        render={({ field }) => (
+          <div className="flex flex-col space-y-3">
             <Slider
               label="Base Salary (Annual)"
               min={10_000}
@@ -102,42 +102,70 @@ export const Step2Compensation: React.FC<Step2Props> = ({
               formatValue={(v) => formatSalary(v, currency)}
               error={errors.baseSalary?.message}
             />
-          )}
-        />
 
-        {/* Synced raw number input */}
-        <div className="flex items-center gap-3">
-          <span className="text-sm font-semibold text-gray-500 whitespace-nowrap">
-            Or type exact value:
-          </span>
-          <Input
-            type="number"
-            placeholder="e.g. 1200000"
-            error={undefined}
-            {...register('baseSalary', { valueAsNumber: true })}
-            className="max-w-xs"
-          />
-        </div>
-      </div>
+            {/* Synced raw number input */}
+            <div className="flex items-center gap-3">
+              <span className="text-sm font-semibold text-gray-500 whitespace-nowrap">
+                Or type exact value:
+              </span>
+              <Input
+                type="number"
+                placeholder="e.g. 1200000"
+                error={undefined}
+                className="max-w-xs"
+                value={field.value === 0 ? '' : field.value}
+                onChange={(e) => {
+                  const val = e.target.value;
+                  field.onChange(val === '' ? 0 : Number(val));
+                }}
+                onBlur={field.onBlur}
+                name={field.name}
+              />
+            </div>
+          </div>
+        )}
+      />
 
       {/* Bonus (optional) */}
-      <Input
-        label="Annual Bonus"
-        type="number"
-        placeholder="0"
-        hint="Approximate annual variable or performance bonus."
-        error={errors.bonus?.message}
-        {...register('bonus', { valueAsNumber: true })}
+      <Controller
+        name="bonus"
+        control={control}
+        render={({ field }) => (
+          <Input
+            {...field}
+            type="number"
+            label="Annual Bonus"
+            placeholder="0"
+            hint="Approximate annual variable or performance bonus."
+            error={errors.bonus?.message}
+            value={field.value === 0 ? '' : field.value}
+            onChange={(e) => {
+              const val = e.target.value;
+              field.onChange(val === '' ? 0 : Number(val));
+            }}
+          />
+        )}
       />
 
       {/* Equity (optional) */}
-      <Input
-        label="Annual Equity Value"
-        type="number"
-        placeholder="0"
-        hint="RSUs, ESOPs, or stock grants — annual vesting value."
-        error={errors.equity?.message}
-        {...register('equity', { valueAsNumber: true })}
+      <Controller
+        name="equity"
+        control={control}
+        render={({ field }) => (
+          <Input
+            {...field}
+            type="number"
+            label="Annual Equity Value"
+            placeholder="0"
+            hint="RSUs, ESOPs, or stock grants — annual vesting value."
+            error={errors.equity?.message}
+            value={field.value === 0 ? '' : field.value}
+            onChange={(e) => {
+              const val = e.target.value;
+              field.onChange(val === '' ? 0 : Number(val));
+            }}
+          />
+        )}
       />
 
       {/* Total Compensation (read-only) */}
