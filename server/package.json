@@ -2,11 +2,11 @@
   "name": "@wageglass/server",
   "version": "1.0.0",
   "private": true,
-  "main": "dist/index.js",
+  "main": "dist/server/src/index.js",
   "scripts": {
     "dev": "ts-node-dev --respawn --transpile-only src/index.ts",
     "build": "tsc",
-    "start": "node dist/index.js",
+    "start": "node dist/server/src/index.js",
     "seed:roles": "ts-node src/config/seedRoles.ts",
     "seed:test": "ts-node src/config/seedTestSubmissions.ts"
   },
