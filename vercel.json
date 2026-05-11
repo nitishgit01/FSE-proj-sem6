@@ -1,0 +1,17 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "_comment": "THIS FILE IS FOR THE SERVER VERCEL PROJECT ONLY (root directory = monorepo root). The client has its own vercel.json inside client/.",
+  "version": 2,
+  "builds": [
+    {
+      "src": "server/api/index.ts",
+      "use": "@vercel/node"
+    }
+  ],
+  "routes": [
+    {
+      "src": "/(.*)",
+      "dest": "/server/api/index.ts"
+    }
+  ]
+}
