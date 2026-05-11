@@ -24,10 +24,9 @@ export const userSchema = new Schema<IUserDocument>(
     email: {
       type: String,
       required: [true, 'Email is required'],
-      unique: true,
+      unique: true,   // unique already creates an index — no need for index:true
       lowercase: true,
       trim: true,
-      index: true,
     },
 
     passwordHash: {
@@ -72,7 +71,8 @@ export const userSchema = new Schema<IUserDocument>(
 // Indexes
 // ────────────────────────────────────────────────────────────────────
 
-userSchema.index({ email: 1 }, { unique: true });
+// Note: email unique index is already created by unique:true in the schema field.
+// Only add indexes here that are NOT implied by field-level options.
 userSchema.index({ createdAt: 1 });
 
 // ────────────────────────────────────────────────────────────────────

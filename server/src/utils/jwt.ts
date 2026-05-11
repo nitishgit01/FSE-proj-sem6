@@ -53,13 +53,19 @@ export const verifyToken = (token: string): { userId: string } | null => {
 
 /**
  * Set the JWT as an HttpOnly cookie named 'wg_token'.
+ *
+ * In production the frontend (Vercel) and backend (Railway) are on different
+ * domains, so we need SameSite=none + Secure=true to allow cross-site cookies.
+ * In development (same localhost origin) we use SameSite=lax which is the
+ * browser default and works fine without HTTPS.
  */
 export const setTokenCookie = (res: Response, token: string): void => {
+  const isProd = env.NODE_ENV === 'production';
   res.cookie(COOKIE_NAME, token, {
     httpOnly: true,
-    secure: env.NODE_ENV === 'production',
-    sameSite: 'strict',
-    maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days in ms
+    secure: isProd,                          // HTTPS only in prod
+    sameSite: isProd ? 'none' : 'lax',      // cross-site in prod, lax in dev
+    maxAge: 7 * 24 * 60 * 60 * 1000,        // 7 days in ms
     path: '/',
   });
 };
@@ -68,10 +74,11 @@ export const setTokenCookie = (res: Response, token: string): void => {
  * Clear the 'wg_token' cookie.
  */
 export const clearTokenCookie = (res: Response): void => {
+  const isProd = env.NODE_ENV === 'production';
   res.cookie(COOKIE_NAME, '', {
     httpOnly: true,
-    secure: env.NODE_ENV === 'production',
-    sameSite: 'strict',
+    secure: isProd,
+    sameSite: isProd ? 'none' : 'lax',
     maxAge: 0,
     path: '/',
   });

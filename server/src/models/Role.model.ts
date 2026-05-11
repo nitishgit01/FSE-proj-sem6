@@ -69,8 +69,8 @@ roleSchema.index(
   }
 );
 
-// Also add a regular index on canonical for exact lookups
-roleSchema.index({ canonical: 1 }, { unique: true });
+// Note: canonical unique index is already created by unique:true in the schema field.
+// The text index above handles full-text search; no extra B-tree index needed.
 
 // ────────────────────────────────────────────────────────────────────
 // JSON Transform
