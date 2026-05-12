@@ -4,7 +4,7 @@ import { useAuth } from '../hooks/useAuth';
 
 type PageState = 'loading' | 'success' | 'expired' | 'error';
 
-const API = import.meta.env.VITE_API_URL ?? 'http://localhost:5000/api';
+const API = import.meta.env.VITE_API_URL ?? '/api';
 
 const VerifyEmailPage: React.FC = () => {
   const { token } = useParams<{ token: string }>();

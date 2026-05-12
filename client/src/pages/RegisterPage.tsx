@@ -64,7 +64,7 @@ const RegisterPage: React.FC = () => {
     setResendSent(false);
 
     try {
-      await fetch(`${import.meta.env.VITE_API_URL ?? 'http://localhost:5000/api'}/auth/resend-verification`, {
+      await fetch(`${import.meta.env.VITE_API_URL ?? '/api'}/auth/resend-verification`, {
         method: 'POST',
         credentials: 'include',
         headers: { 'Content-Type': 'application/json' },

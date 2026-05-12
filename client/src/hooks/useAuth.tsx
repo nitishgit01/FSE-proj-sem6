@@ -10,7 +10,7 @@ import type { AuthUser } from '@shared/types/index';
 
 // ─── API base ──────────────────────────────────────────────────────────
 
-const API = import.meta.env.VITE_API_URL ?? 'http://localhost:5000/api';
+const API = import.meta.env.VITE_API_URL ?? '/api';
 
 async function apiFetch<T>(path: string, opts?: RequestInit): Promise<T> {
   const res = await fetch(`${API}${path}`, {
