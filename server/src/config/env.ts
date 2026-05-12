@@ -20,9 +20,7 @@
 const required = (key: string): string => {
   const value = process.env[key];
   if (!value) {
-    console.error(`❌ Missing required environment variable: ${key}`);
-    console.error(`   Add it to your .env file or set it in your hosting dashboard.`);
-    process.exit(1);
+    throw new Error(`Missing required environment variable: ${key}. Add it to your .env file or set it in your hosting dashboard.`);
   }
   return value;
 };
@@ -86,8 +84,7 @@ export const config: EnvConfig = {
   JWT_SECRET: (() => {
     const secret = required('JWT_SECRET');
     if (secret.length < 32) {
-      console.error('❌ JWT_SECRET must be at least 32 characters for HS256 security.');
-      process.exit(1);
+      throw new Error('JWT_SECRET must be at least 32 characters for HS256 security.');
     }
     return secret;
   })(),
