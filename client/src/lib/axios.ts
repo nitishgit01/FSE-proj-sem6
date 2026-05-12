@@ -8,18 +8,7 @@ import axios from 'axios';
  * - withCredentials = true to ensure HttpOnly cookies (wg_token) are sent/received
  * - Structured error handling via interceptors
  */
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
-
-// Warn loudly in the browser console if the API URL is not configured
-// (catches the common mistake of not setting VITE_API_URL in Vercel dashboard)
-if (import.meta.env.PROD && (!import.meta.env.VITE_API_URL || import.meta.env.VITE_API_URL === '')) {
-  console.error(
-    '[WageGlass] ⚠️  VITE_API_URL is not set for production!\n' +
-    'Set it in: Vercel dashboard → Settings → Environment Variables\n' +
-    'Key: VITE_API_URL   Value: https://<your-railway-url>.railway.app/api\n' +
-    'Then redeploy. Without this, all API calls will fail.'
-  );
-}
+const API_URL = import.meta.env.VITE_API_URL || '/api';
 
 const axiosInstance = axios.create({
   baseURL: API_URL,

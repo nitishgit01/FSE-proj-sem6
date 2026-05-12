@@ -1,8 +1,13 @@
 {
-  "$schema": "https://openapi.vercel.sh/vercel.json",
-  "_comment": "THIS FILE IS FOR THE SERVER VERCEL PROJECT ONLY (root directory = monorepo root). The client has its own vercel.json inside client/.",
   "version": 2,
   "builds": [
+    {
+      "src": "package.json",
+      "use": "@vercel/static-build",
+      "config": {
+        "distDir": "client/dist"
+      }
+    },
     {
       "src": "server/api/index.ts",
       "use": "@vercel/node"
@@ -10,8 +15,15 @@
   ],
   "routes": [
     {
-      "src": "/(.*)",
+      "src": "/api/(.*)",
       "dest": "/server/api/index.ts"
+    },
+    {
+      "handle": "filesystem"
+    },
+    {
+      "src": "/(.*)",
+      "dest": "/index.html"
     }
   ]
 }
