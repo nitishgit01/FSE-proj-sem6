@@ -45,10 +45,11 @@ export const sendVerificationEmail = async (
   to: string,
   token: string
 ): Promise<void> => {
-  const verifyUrl = `${env.CLIENT_URL}/verify-email?token=${token}`;
+  const verifyUrl = `${env.CLIENT_URL}/verify-email/${token}`;
+  const fromEmail = env.FROM_EMAIL || 'onboarding@resend.dev';
 
   const mailOptions = {
-    from: `"WageGlass" <${env.FROM_EMAIL}>`,
+    from: `"WageGlass" <${fromEmail}>`,
     to,
     subject: 'Verify your WageGlass account',
     html: `
@@ -75,14 +76,23 @@ export const sendVerificationEmail = async (
   };
 
   if (transporter) {
-    await transporter.sendMail(mailOptions);
-    const masked = to.substring(0, 3) + '***@' + to.split('@')[1];
-    console.log(`📧 Verification email sent to ${masked}`);
+    try {
+      console.log(`📧 Attempting to send email to ${to.substring(0, 3)}***@${to.split('@')[1]} from ${fromEmail}`);
+      const result = await transporter.sendMail(mailOptions);
+      console.log(`✅ Email sent successfully. MessageId: ${result.messageId}`);
+    } catch (err: any) {
+      console.error(`❌ Email send failed:`, err.message);
+      console.error(`   Provider: ${env.RESEND_API_KEY ? 'Resend' : 'SMTP'}`);
+      console.error(`   From: ${fromEmail}`);
+      console.error(`   To: ${to}`);
+      // Don't crash registration — user can resend later
+    }
   } else {
     // Dev fallback: log the verification URL
     console.log('──────────────────────────────────────────');
-    console.log(`📧 DEV MODE — Verification email for: ${to}`);
+    console.log(`📧 NO EMAIL PROVIDER — Verification email for: ${to}`);
     console.log(`🔗 Verify URL: ${verifyUrl}`);
+    console.log(`ℹ️  Set RESEND_API_KEY env var to enable real emails`);
     console.log('──────────────────────────────────────────');
   }
 };
